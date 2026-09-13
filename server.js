@@ -237,7 +237,7 @@ function page() {
         <button type="button" class="small muted-btn" id="addMat">＋ 添加原料</button>
         <div class="meta" id="ratioSum">合计：0%</div>
         <div class="err" id="createErr"></div>
-        <button>建档</button>
+        <button type="submit">建档</button>
       </form>
     </section>
     <section>
@@ -259,7 +259,7 @@ function page() {
     const SMELLS = ${JSON.stringify(SMELLS)};
     const FIBERS = ${JSON.stringify(FIBERS)};
     const MOLDS = ${JSON.stringify(MOLDS)};
-    let batches = [], selectedId = null;
+    let batches = [], selectedId = null, openTask = null;
     const $ = (s) => document.querySelector(s);
     const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
     const dtLocal = (iso) => { try { const d=new Date(iso); return isNaN(d)?"":new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); } catch { return ""; } };
@@ -307,8 +307,8 @@ function page() {
         '<div class="overdue-line">'+x.b.id+' · '+esc(x.t.title)+'（截止 '+fmt(x.t.dueAt)+'，负责人 '+esc(x.b.owner)+'） <button class="small" data-open="'+x.b.id+'">前往处理</button></div>').join("")
         : '<div class="meta">暂无超期待办</div>';
       $("#cards").innerHTML = visible.map(cardHtml).join("") || '<div class="meta">无匹配批次</div>';
-      document.querySelectorAll("[data-open]").forEach(btn => btn.onclick = (e) => { e.stopPropagation(); selectedId = btn.dataset.open; render(); renderDetail(); });
-      $("#cards .card").forEach(c => c.onclick = () => { selectedId = c.dataset.id; render(); renderDetail(); });
+      document.querySelectorAll("[data-open]").forEach(btn => btn.onclick = (e) => { e.stopPropagation(); selectedId = btn.dataset.open; render(); });
+      document.querySelectorAll("#cards .card").forEach(c => c.onclick = () => { selectedId = c.dataset.id; render(); });
       renderDetail();
     }
     function cardHtml(b) {
@@ -374,7 +374,6 @@ function page() {
       + '</div>';
       bindDetail(b);
     }
-    let openTask = null;
     function closeForm(t) {
       return '<form id="closeForm" style="margin-top:10px;border-top:1px solid var(--line);padding-top:8px">'
       + '<label>处置事项</label><div class="meta">'+esc(t.title)+'　截止 '+fmt(t.dueAt)+(t.overdue?' <span class="pill warn">已超期</span>':'')+'</div>'
@@ -398,8 +397,17 @@ function page() {
         try { await api("/api/batches/"+b.id+"/tasks/"+openTask.id+"/close", { method:"POST", body: JSON.stringify(Object.fromEntries(f.entries())) }); await load(); }
         catch(e){ $("#closeErr").textContent = e.message; } };
       const statusForm = $("#statusForm");
-      statusForm.onsubmit = async (ev) => { ev.preventDefault(); const f = new FormData(statusForm);
-        try { await api("/api/batches/"+b.id+"/status", { method:"POST", body: JSON.stringify({ status:f.get("status") }) }); await load(); }
+      statusForm.onsubmit = async (ev) => {
+        ev.preventDefault();
+        const f = new FormData(statusForm);
+        const target = f.get("status");
+        $("#statusErr").textContent = "";
+        // 前端预检，避免发出注定失败的请求；服务端仍为最终闸门
+        if (target === "可抄纸" && (b.openCount > 0)) {
+          $("#statusErr").textContent = "尚有 " + b.openCount + " 项处置事项未关闭，不能转为可抄纸";
+          return;
+        }
+        try { await api("/api/batches/"+b.id+"/status", { method:"POST", body: JSON.stringify({ status:target }) }); await load(); }
         catch(e){ $("#statusErr").textContent = e.message; } };
     }
     async function load() {
@@ -646,5 +654,11 @@ const server = http.createServer(async (req, res) => {
     send(res, 500, { error: error.message });
   }
 });
+
+// 启动时确保存储就绪：旧版数据迁移并落盘
+await (async () => {
+  const db = await loadDb();
+  await saveDb(db);
+})();
 
 server.listen(port, () => console.log("古法纸浆发酵批次追溯与处置系统 listening on http://localhost:" + port));
